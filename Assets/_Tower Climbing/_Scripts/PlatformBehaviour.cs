@@ -17,14 +17,21 @@ public class PlatformBehaviour : MonoBehaviour {
     }
 
     // Update is called once per frame
-    void Update () {
+    void Update () 
+    {
 
+        /*
         if(!isAttached)
         {
             MoveDown();
         }
-	}
+        */
 
+        MoveDown();
+    }
+
+    
+    /*
     private void OnTriggerEnter(Collider other)
     {
         if (other.gameObject.tag == "Plat")
@@ -33,13 +40,23 @@ public class PlatformBehaviour : MonoBehaviour {
             isAttached = true;
         }
     }
+    */
 
     private void OnCollisionEnter(Collision collision)
     {
+        /*
         if (collision.gameObject.tag == "Plat")
         {
             //AttachToTower();
             isAttached = true;
+        }
+        */
+
+        if (collision.gameObject.tag == "TowerBase")
+        {
+            //AttachToTower();
+            //isAttached = true;
+            Destroy(this.gameObject);
         }
     }
 

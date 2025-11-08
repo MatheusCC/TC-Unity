@@ -42,6 +42,7 @@ public class TowerManager : MonoBehaviour {
 	// Update is called once per frame
 	void Update () {
 
+        /*
         platSpawnTimer -= Time.deltaTime;
         if(platSpawnTimer <= 0)
         {
@@ -49,8 +50,10 @@ public class TowerManager : MonoBehaviour {
             SpawnPlat();
             platSpawnTimer = spawnPlatRate;
         }
+        */
         
 
+        /*
         // Lerp tower euler angle 
         if (isTowerRotating)
         {
@@ -74,6 +77,7 @@ public class TowerManager : MonoBehaviour {
                 elapsed = 0;
             }
         }
+        */
     }
 
     public void RotateTower(bool isLeftRotation)
@@ -102,6 +106,7 @@ public class TowerManager : MonoBehaviour {
     // Spawn a plat using one of the 4 spawn positions
     private void SpawnPlat()
     {
+        /*
         const int MAX_TRIES = 99;
         int randomRotation = -1;
 
@@ -118,14 +123,16 @@ public class TowerManager : MonoBehaviour {
                 break;
             }
         }
+        */
 
-        GameObject platform = Instantiate(platPrefab, platformSpawns[randomPos].position, Quaternion.identity) as GameObject;
+        GameObject platform = Instantiate(platPrefab, platformSpawns[randomPos].position, platPrefab.transform.rotation) as GameObject;
         platform.GetComponent<PlatformBehaviour>().Initialize(towerParentParam: towerBase);
-        platform.transform.SetParent(towerBase.transform, true);
+        //platform.transform.SetParent(towerBase.transform, true);
         
+        /*
         Vector3 platRotation = platform.transform.localEulerAngles;
         platRotation.y = platDefaultRotations[randomRotation];
         platform.transform.localEulerAngles = platRotation;
-
+        */
     }
 }
