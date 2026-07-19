@@ -7,6 +7,8 @@ namespace PawsAndCare.Economy
     public enum ExpenseType
     {
         SALARY = 0,
-        HIRING = 1
+        HIRING = 1,
+        FURNITURE = 2,
+        ROOM_UNLOCK = 3
     }
 }
