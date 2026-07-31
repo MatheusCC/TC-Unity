@@ -4,73 +4,83 @@ using UnityEngine;
 namespace PawsAndCare.Building
 {
     /// <summary>
-    /// Scene-placed marker that registers its GameObject as a room with the GridSystem at boot.
-    /// Attach to a room's floor GameObject and configure the grid origin and size in cells.
+    /// Scene-placed marker that registers its GameObject as a room with the GridSystem at boot. Attach
+    /// to a room's floor; the room's cells are derived from that floor's world bounds — you size the
+    /// floor visually and the cells follow, so there are no grid coordinates to hand-author. Only the
+    /// RoomType is set here.
     /// </summary>
     public class RoomMarker : MonoBehaviour
     {
         [SerializeField]
         private RoomType roomType = RoomType.RECEPTION;
 
-        [SerializeField]
-        [Tooltip("Bottom-left grid cell of this room (inclusive).")]
-        private Vector2Int origin = new Vector2Int(0, 0);
-
-        [SerializeField]
-        [Tooltip("Room size in cells (width × height).")]
-        private Vector2Int size = new Vector2Int(1, 1);
-
         public RoomType RoomType
         {
             get { return roomType; }
         }
 
-        public Vector2Int Origin
-        {
-            get { return origin; }
-        }
-
-        public Vector2Int Size
-        {
-            get { return size; }
-        }
-
         /// <summary>
-        /// Returns the list of grid cells this room occupies, computed from origin + size.
+        /// Returns the grid cells this room covers, derived from the floor's world bounds via the grid.
+        /// Empty if the floor has no renderers to measure.
         /// </summary>
-        public List<Vector2Int> GetCells()
+        public List<Vector2Int> GetCells(GridSystem grid)
         {
-            List<Vector2Int> cells = new List<Vector2Int>();
+            List<Vector2Int> cells;
 
-            for (int x = 0; x < size.x; x++)
+            if (grid != null && TryGetWorldBounds(out Bounds bounds))
             {
-                for (int y = 0; y < size.y; y++)
-                {
-                    cells.Add(origin + new Vector2Int(x, y));
-                }
+                cells = grid.GetCellsInBounds(bounds);
+            }
+            else
+            {
+                cells = new List<Vector2Int>();
+                Debug.LogError("[RoomMarker] No GridSystem or no renderer bounds to derive cells from.", this);
             }
 
             return cells;
         }
 
-        // OnDrawGizmos draws a wireframe rectangle in the scene view showing which grid cells the
-        // marker claims. Editor-only callback (Unity strips it from builds), and FindFirstObjectByType
-        // is acceptable here because gizmos only render in the editor — never in the runtime hot path.
+        // World AABB of this room's floor, encapsulating all child renderers.
+        private bool TryGetWorldBounds(out Bounds bounds)
+        {
+            Renderer[] renderers = GetComponentsInChildren<Renderer>();
+            bool hasBounds = renderers.Length > 0;
+
+            if (hasBounds)
+            {
+                bounds = renderers[0].bounds;
+
+                for (int i = 1; i < renderers.Length; i++)
+                {
+                    bounds.Encapsulate(renderers[i].bounds);
+                }
+            }
+            else
+            {
+                bounds = new Bounds(transform.position, Vector3.zero);
+            }
+
+            return hasBounds;
+        }
+
+        // Draws the cells this room actually claims, live in the scene view — resize the floor and the
+        // filled cells follow, so placement is verifiable without entering play mode. Editor-only
+        // callback; FindFirstObjectByType is fine here since gizmos never run in the runtime hot path.
         private void OnDrawGizmos()
         {
             GridSystem grid = FindFirstObjectByType<GridSystem>();
 
-            if (grid != null)
+            if (grid != null && TryGetWorldBounds(out Bounds bounds))
             {
-                // GridToWorld returns the CENTER of each cell, so the midpoint of the near and far
-                // corner-cell centers is the room's world-space center; world size = cells × cellSize.
-                Vector3 nearWorld = grid.GridToWorld(origin);
-                Vector3 farWorld = grid.GridToWorld(origin + size - new Vector2Int(1, 1));
-                Vector3 center = (nearWorld + farWorld) * 0.5f;
-                Vector3 worldSize = new Vector3(size.x * grid.CellSize, 0.05f, size.y * grid.CellSize);
+                List<Vector2Int> cells = grid.GetCellsInBounds(bounds);
+                Vector3 cellSize = new Vector3(grid.CellSize * 0.9f, 0.05f, grid.CellSize * 0.9f);
 
-                Gizmos.color = new Color(0.0f, 0.85f, 1.0f, 0.9f);
-                Gizmos.DrawWireCube(center, worldSize);
+                Gizmos.color = new Color(0.0f, 0.85f, 1.0f, 0.65f);
+
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    Gizmos.DrawCube(grid.GridToWorld(cells[i]), cellSize);
+                }
             }
         }
     }

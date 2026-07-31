@@ -6,7 +6,7 @@
 
 **Design decision (locked):** **no wall/door construction.** Rooms are hand-authored in the scene (preserving level-design quality); "expansion" = **unlocking a preset locked room**, which is a fraction of the cost of true construction and sidesteps exactly the complexity the TDD defers — *"wall rendering, and structural validation"* (§12.2). Within any open room, placement/decoration is free-form on the grid. This blends four concepts on purpose: **building** (rooms), **placement** (stations/furniture), **progression** (reputation-gated unlocks), **expansion** (growing footprint).
 
-**First vertical slice:** **Buy & place a station** end-to-end — open the catalog (game pauses), pick an affordable buildable, ghost-preview it on valid grid cells, confirm, pay, NavMesh rebakes, and the station immediately serves customers. Tasks 1→2→3→4.
+**First vertical slice:** **Buy & place a station** end-to-end — open the catalog (game pauses), pick an affordable blueprint, ghost-preview it on valid grid cells, confirm, pay, NavMesh rebakes, and the station immediately serves customers. Tasks 1→2→3→4.
 
 **Maps to:** TDD §12 (Building System — Grid §12.1, Placement §12.3, NavMesh §12.4), extended past strict §12.2 MVP with the light room-unlock model above. GDD §8.1–8.2 (grid placement, rooms + Unlock Phases), §9.3 (reputation + money unlock layers; the XP skill tree stays post-MVP).
 
@@ -29,43 +29,52 @@ Systems already in place that Phase 3 builds on:
 
 ---
 
-## Task 1 — Buildable Data Foundations `[TODO]`
+## Task 1 — Blueprint Data Foundations `[TODO]`
 
 Mirrors the `ServiceData` / `PetDefinition` SO pattern: data in ScriptableObjects, logic in components.
 
-### 1A — BuildableDefinition ScriptableObject
-- [ ] 1A.1 `BuildableDefinition : ScriptableObject` in `Scripts/Building/`: `displayName`, `description`, `cost`, `footprint` (Vector2Int, in cells), placed prefab reference, `uiIcon`
-- [ ] 1A.2 `category` (`BuildCategory` enum: `STATION`, `FURNITURE`, `DECORATION`) and optional `requiredRoomType` (`RoomType`; `NONE` = any room) — drives placement rules + which catalog tab it lives in
-- [ ] 1A.3 `requiredReputation` (0 = available from start) — the reputation gate for this buildable
-- [ ] 1A.4 `[CreateAssetMenu]` (menu: `PawsAndCare/Building/Buildable Definition`)
+### 1A — Blueprint ScriptableObject
+- [x] 1A.1 `Blueprint : ScriptableObject` in `Scripts/Building/`: `displayName`, `description`, `cost`, `footprint` (Vector2Int, in cells), placed prefab reference, `uiIcon`
+- [x] 1A.2 `category` (`BlueprintCategory` enum: `STATION`, `FURNITURE`, `DECORATION`) and optional `requiredRoomType` (`RoomType`; `NONE` = any room) — drives placement rules + which catalog tab it lives in
+- [x] 1A.3 `requiredReputation` (0 = available from start) — the reputation gate for this blueprint
+- [x] 1A.4 `[CreateAssetMenu]` (menu: `PawsAndCare/Building/Blueprint`)
 
 ### 1B — Enums & expense types (append-only per CLAUDE.md)
-- [ ] 1B.1 `BuildCategory` enum (own file, UPPER_SNAKE): `STATION`, `FURNITURE`, `DECORATION`
-- [ ] 1B.2 Append to `ExpenseType`: `FURNITURE` (buying/placing a buildable) and `ROOM_UNLOCK` (Task 5) — **at end, never reorder**
+- [x] 1B.1 `BlueprintCategory` enum (own file, UPPER_SNAKE): `STATION`, `FURNITURE`, `DECORATION`
+- [x] 1B.2 Append to `ExpenseType`: `FURNITURE` (buying/placing a blueprint) and `ROOM_UNLOCK` (Task 5) — **at end, never reorder**
 
-### 1C — Buildable assets
-- [ ] 1C.1 `Buildable_BathingStation` and `Buildable_GroomingStation` from the existing station prefabs (available from start)
+### 1C — Blueprint assets
+- [ ] 1C.1 `Blueprint_BathingStation` and `Blueprint_GroomingStation` from the existing station prefabs (available from start)
 - [ ] 1C.2 One furniture + one decoration asset to prove the non-station categories place correctly
-- [ ] 1C.3 One reputation-locked buildable (e.g. `Buildable_VetStation`, `requiredReputation` > 0) to prove gating end-to-end
+- [ ] 1C.3 One reputation-locked blueprint (e.g. `Blueprint_VetStation`, `requiredReputation` > 0) to prove gating end-to-end
 
 ---
 
-## Task 2 — Grid-Occupancy Activation `[TODO]` `(FOUNDATION)`
+## Task 2 — Floor-First Grid + Occupancy Activation `[DONE]` `(FOUNDATION)`
 
-The grid tracks coordinates and rooms but **not what sits on it** — `GridCell` occupancy setters are never called at runtime, so `IsCellAvailable` treats station cells as free. This task makes occupancy the facility's **spatial source of truth**, which placement (Task 3), rearrange/sell, layout **persistence** (Task 10 — the save data *is* the occupancy map), and **Chaos** spatial queries (Phase 4 — facility-size modifier, room containment) all read. Done here, before build mode, so everything downstream stands on a truthful grid.
+**Grew from "occupancy activation" into a foundation refactor** (see design decision below). Two problems: (1) the grid was *grid-first* — you hand-typed `width`/`height`/`cellSize` on `GridSystem` and grid-cell `origin`/`size` on each `RoomMarker`, coordinates offset from world space that required an edit→play→check loop to verify. (2) `GridCell` occupancy setters were never called at runtime, so `IsCellAvailable` treated authored-station cells as free. Both fixed by inverting the model: **you author in world space; the grid, rooms, and footprints all discretize from it. Nobody types grid coordinates or dimensions.** Occupancy becomes the spatial source of truth that placement (Task 3), rearrange/sell, layout **persistence** (Task 10 — the save data *is* the occupancy map), and **Chaos** spatial queries (Phase 4) all read.
 
-### 2A — Footprint component
-- [ ] 2A.1 `GridFootprint : MonoBehaviour` in `Scripts/Building/` on any placed object (station/furniture/decor): holds its `footprint` (from its `BuildableDefinition`) and a serialized `GridSystem` reference
-- [ ] 2A.2 `Occupy()` stamps every footprint cell `SetOccupied(gameObject)`; `Free()` clears them (`SetOccupied(null)`). Derive footprint cells from the object's grid origin + footprint size
-- [ ] 2A.3 Expose `OccupiedCells` so rearrange/sell (Task 3) can free the right cells
+**Design decisions (locked with user):** grid bounds derive **from a floor reference** (`GridSystem.lotFloor`, encapsulating child renderers); grid covers the **whole lot, static** (locked rooms' floors included — unlocking flips a room active over cells that already exist, no runtime regrow).
 
-### 2B — Register authored stations at boot
-- [ ] 2B.1 `FacilityBuilder.Build()` (or a small pass it calls) stamps occupancy for scene-authored `GridFootprint` objects **after** `RegisterRooms` and **before** the NavMesh bake — so hand-placed stations occupy their cells just like runtime-placed ones
-- [ ] 2B.2 Verify the `GridSystem` occupied-cell gizmo now renders the authored facility (free visual confirmation that occupancy is live)
+### 2A — GridSystem builds around the floor
+- [x] 2A.1 Removed serialized `width`/`height`; keep only `cellSize` (1m, TDD §12.1). Derive `Origin`/`Width`/`Height` from `lotFloor`'s combined renderer bounds (`RecomputeMetrics`). Cached at runtime, recomputed live in-editor so gizmos/camera track the floor as it's resized
+- [x] 2A.2 `WorldToGrid`/`GridToWorld` use the derived `Origin`; new public `Origin` property (camera pan-bounds switched from `transform.position` to it)
+- [x] 2A.3 `GridSystem` gizmo recomputes from the floor → the grid overlay conforms live in the scene view (no play needed)
 
-### 2C — Occupancy query helpers
-- [ ] 2C.1 `GridSystem.AreCellsAvailable(origin, footprint)` — multi-cell wrapper over `IsCellAvailable` (in bounds + not occupied + walkable), used by both placement validity and the authored-station sanity check
-- [ ] 2C.2 `GridSystem.GetCellsInRoom` / room lookup by cell (via `GridCell.RoomId`) — supports the "fits entirely within one room" rule and future room-scoped logic (ambiance, routing)
+### 2B — RoomMarker derives cells from the floor
+- [x] 2B.1 Removed `origin`/`size` fields — only `RoomType` is authored. `GetCells(grid)` derives cells from the floor's world bounds via `GridSystem.GetCellsInBounds` (min→max cell, edge-epsilon, clamped to grid)
+- [x] 2B.2 Live per-cell gizmo draws the exact claimed cells — resize the floor, cells follow; misalignment is visible without entering play
+
+### 2C — GridFootprint (occupancy)
+- [x] 2C.1 `GridFootprint : MonoBehaviour` on placed objects: serializes a `Blueprint` (footprint source + cost for refunds/save). `Occupy(grid)` derives cells from world position (transform = footprint centre) and `SetOccupied(gameObject)`; `Free()` clears them; `OccupiedCells` exposed for rearrange/sell
+- [x] 2C.2 Grid is **owner-injected** into `Occupy` — no per-prefab `GridSystem` ref, no runtime `Find`
+
+### 2D — Boot registration + query helper
+- [x] 2D.1 `FacilityBuilder` **auto-discovers** `RoomMarker`s and `GridFootprint`s (`FindObjectsByType`, one-time boot scan) — dropped the manual `roomMarkers` list, so a room/station can't be silently forgotten
+- [x] 2D.2 `GridSystem.AreCellsAvailable(origin, footprint)` — multi-cell wrapper for Task 3 placement validity
+- [ ] 2D.3 **Manual (editor):** assign `GridSystem.lotFloor`; add `GridFootprint` + `Blueprint` to authored station prefabs; grid-align stations; confirm the occupied-cell gizmo renders under them at play
+
+**Correction applied:** the earlier plan said "stamp occupancy *before* the NavMesh bake" — dropped. `SetOccupied` sets `isOccupied`, which the bake never reads (NavMesh comes from geometry + `NavMeshModifier`), so ordering vs. bake is irrelevant. The room-lookup helper (old 2C.2) moved to Task 3, where "fits within one room" is actually used (YAGNI here).
 
 ---
 
@@ -75,7 +84,7 @@ Runtime placement on the now-truthful grid — TDD §12.3. Build mode is a disti
 
 ### 3A — Build mode entry/exit
 - [ ] 3A.1 Append `BUILD_MODE` to the existing `InteractionMode` enum (append-only); `InteractionManager`/`AgentController` route input to build mode while active
-- [ ] 3A.2 `BuildModeController : MonoBehaviour` in `Scripts/Building/` (input-layer controller, like `AgentController`) — entered with a selected `BuildableDefinition`, exited on place / cancel (right-click / Esc)
+- [ ] 3A.2 `BuildModeController : MonoBehaviour` in `Scripts/Building/` (input-layer controller, like `AgentController`) — entered with a selected `Blueprint`, exited on place / cancel (right-click / Esc)
 - [ ] 3A.3 Build mode pauses the day through `UIManager`/`pausesGame` (single pause owner — never call `DayManager.SetPaused` directly)
 
 ### 3B — Ghost preview & validation (§12.3)
@@ -86,11 +95,11 @@ Runtime placement on the now-truthful grid — TDD §12.3. Build mode is a disti
 ### 3C — Placement commit
 - [ ] 3C.1 On confirm: re-validate, then charge via `ExpenseIncurredEvent(cost, FURNITURE)` — **validate before charging** (same rule as `TryHire`)
 - [ ] 3C.2 Instantiate the placed prefab at the footprint center; its `GridFootprint.Occupy()` stamps the cells; a placed `ServiceStation` self-registers with `StationManager` (existing behavior — Task 2B makes its occupancy real too)
-- [ ] 3C.3 Publish `BuildablePlacedEvent` (definition + grid origin) for milestones/UI/persistence
+- [ ] 3C.3 Publish `BlueprintPlacedEvent` (definition + grid origin) for milestones/UI/persistence
 
 ### 3D — Rearrange & sell
 - [ ] 3D.1 Select an already-placed object in build mode → pick it up: `GridFootprint.Free()` its cells, re-enter the ghost flow to re-place it (no re-charge for a move)
-- [ ] 3D.2 Sell/remove: `Free()` cells, destroy, refund a fraction via `ApplyDelta` (positive); publish `BuildableRemovedEvent`
+- [ ] 3D.2 Sell/remove: `Free()` cells, destroy, refund a fraction via `ApplyDelta` (positive); publish `BlueprintRemovedEvent`
 
 ### 3E — NavMesh (§12.4)
 - [ ] 3E.1 Async NavMesh rebake on **build-mode exit** (not per placement); agents mid-path must survive it (watch the `HasReachedDestination` arrival latch fixed in Phase 2)
@@ -101,7 +110,7 @@ Runtime placement on the now-truthful grid — TDD §12.3. Build mode is a disti
 
 Second real panel on the `UIPanel` framework (`HireScreen` is the template).
 
-- [ ] 4.1 `BuildMenuScreen : UIPanel` in `Scripts/UI/` — lists `BuildableDefinition`s (icon, name, cost), grouped/filtered by `BuildCategory`; locked entries greyed with their reputation requirement
+- [ ] 4.1 `BuildMenuScreen : UIPanel` in `Scripts/UI/` — lists `Blueprint`s (icon, name, cost), grouped/filtered by `BlueprintCategory`; locked entries greyed with their reputation requirement
 - [ ] 4.2 Entry click → close panel → enter build mode with that definition (hand pause from panel to build mode with no un-pause flicker)
 - [ ] 4.3 Affordability greying via `BalanceChangedEvent` while open (same pattern as `HireScreen`); locked state via `ProgressionManager` (Task 5)
 - [ ] 4.4 Status-bar **Build** button (beside Hire) opens the catalog
@@ -113,8 +122,8 @@ Second real panel on the `UIPanel` framework (`HireScreen` is the template).
 The progression + expansion layer: pre-authored rooms that start locked and open up when purchased. No construction — just registering an existing room and extending the NavMesh.
 
 ### 5A — ProgressionManager
-- [ ] 5A.1 `ProgressionManager : Singleton<ProgressionManager>` in `Scripts/Progression/` — single query point `IsUnlocked(BuildableDefinition)` (reputation gate) and room-unlock state
-- [ ] 5A.2 Subscribes to `ReputationChangedEvent`; crossing a threshold publishes `BuildableUnlockedEvent`. Unlocks are **latching** (a later reputation drop never re-locks — punitive; GDD §9.2)
+- [ ] 5A.1 `ProgressionManager : Singleton<ProgressionManager>` in `Scripts/Progression/` — single query point `IsUnlocked(Blueprint)` (reputation gate) and room-unlock state
+- [ ] 5A.2 Subscribes to `ReputationChangedEvent`; crossing a threshold publishes `BlueprintUnlockedEvent`. Unlocks are **latching** (a later reputation drop never re-locks — punitive; GDD §9.2)
 
 ### 5B — Locked expansion rooms
 - [ ] 5B.1 `ExpansionRoom : MonoBehaviour` in `Scripts/Building/` — holds its `RoomMarker`, unlock cost, optional `requiredReputation` (maps to the GDD §8.2 Unlock-Phase column), and a locked visual (fence/tarp)
@@ -127,7 +136,7 @@ The progression + expansion layer: pre-authored rooms that start locked and open
 ## Task 6 — Decoration & Milestones (light) `[TODO]`
 
 ### 6A — Decoration
-- [ ] 6A.1 `DECORATION` buildables place exactly like furniture (Task 3 flow) — visual only for now; the **ambiance *score*** (GDD §8.3) is deferred (it's a system unto itself)
+- [ ] 6A.1 `DECORATION` blueprints place exactly like furniture (Task 3 flow) — visual only for now; the **ambiance *score*** (GDD §8.3) is deferred (it's a system unto itself)
 
 ### 6B — Milestones
 - [ ] 6B.1 `MilestoneTracker : MonoBehaviour` in `Scripts/Progression/` (non-singleton, event-driven), 2–3 launch milestones from GDD §9.1: **Employee of the Month** (first hire), **Expanding Horizons** (first room unlock), **Five Star Review** (N high-quality services)
@@ -142,7 +151,7 @@ The progression + expansion layer: pre-authored rooms that start locked and open
 - [ ] 7.3 Invalid placements impossible: occupied cells, out of bounds, spanning two rooms, wrong/locked room, blocked entrance, insufficient funds
 - [ ] 7.4 Rearrange (free move) and sell (refund) update occupancy correctly; no orphaned occupied cells
 - [ ] 7.5 NavMesh updates on build-mode exit; pets/workers path around new objects; agents mid-path don't deadlock
-- [ ] 7.6 Reputation threshold unlocks a locked buildable at runtime (latching); locked room unlock → build inside → full loop
+- [ ] 7.6 Reputation threshold unlocks a locked blueprint at runtime (latching); locked room unlock → build inside → full loop
 - [ ] 7.7 Full building playtest across a day; more stations = more throughput/revenue
 
 ---
@@ -159,9 +168,9 @@ Per TDD §12.2 + GDD §8–9: **wall/door construction & free-form room drawing*
 - **`GridSystem` is not a singleton** — Phase 3 components take a serialized reference (the established pattern), never a global lookup.
 - **Economy chokepoint untouched.** Buying furniture and unlocking rooms spend via `ExpenseIncurredEvent` → `ApplyDelta`, like salaries/hiring. New `ExpenseType` values are appended, never reordered.
 - **Pause ownership stays with `UIManager`.** Build mode reuses the same pause path panels use; nothing else touches `DayManager.SetPaused` directly.
-- **Unlock state lives in one place** (`ProgressionManager`), queried (never cached) by UI. Events (`BuildableUnlockedEvent` / `RoomUnlockedEvent`) notify; the manager answers.
+- **Unlock state lives in one place** (`ProgressionManager`), queried (never cached) by UI. Events (`BlueprintUnlockedEvent` / `RoomUnlockedEvent`) notify; the manager answers.
 - **Pre-authored rooms over procedural construction.** Player agency is *what to place and when to expand*, not drawing walls — a fraction of the tooling cost, consistent with the scene-authored facility, and honoring the TDD's stated reason for deferring construction.
-- **Persistence impact (Task 10, deferred):** placed buildables (the occupancy map), unlocked rooms, unlock + milestone state all become save data — a core reason persistence runs after this phase.
+- **Persistence impact (Task 10, deferred):** placed blueprints (the occupancy map), unlocked rooms, unlock + milestone state all become save data — a core reason persistence runs after this phase.
 
 ---
 
@@ -171,7 +180,7 @@ Per TDD §12.2 + GDD §8–9: **wall/door construction & free-form room drawing*
 - [ ] Objects can be rearranged (free move) and sold (partial refund) with occupancy staying correct
 - [ ] Grid occupancy is truthful for authored *and* placed objects (gizmo confirms); placement validity enforces all §12.3 rules
 - [ ] At least one locked room unlocks (money + optional reputation gate) and is buildable inside
-- [ ] At least one buildable is reputation-gated and unlocks at runtime (latching)
+- [ ] At least one blueprint is reputation-gated and unlocks at runtime (latching)
 - [ ] All spending flows through `ApplyDelta` with appended `ExpenseType`s; NavMesh stays correct after every change
 - [ ] 2–3 milestones fire with rewards
 - [ ] All code follows CLAUDE.md conventions

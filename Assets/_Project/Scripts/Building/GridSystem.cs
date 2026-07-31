@@ -4,56 +4,151 @@ using UnityEngine;
 namespace PawsAndCare.Building
 {
     /// <summary>
-    /// Owns the 2D grid of cells used for placement, room assignment, and pathfinding.
-    /// Coordinates: grid (x, y) maps to world (X, Z) relative to this transform's position.
-    /// Grid (0, 0) is at transform.position; cell centers are offset by cellSize/2.
+    /// Owns the 2D grid of cells used for placement, room assignment, and pathfinding. The grid is
+    /// built AROUND the authored lot floor: its origin, width, and height are derived from that floor's
+    /// world bounds so nothing is sized by hand — you author the floor in world space and the grid
+    /// discretizes it at cellSize granularity. Coordinates: grid (x, y) maps to world (X, Z) relative
+    /// to the derived Origin (the floor's min corner); cell centers are offset by cellSize/2.
     /// </summary>
     public class GridSystem : MonoBehaviour
     {
         [SerializeField]
-        private int width = 20;
-        [SerializeField]
-        private int height = 20;
-        [SerializeField]
+        [Tooltip("World units per cell. TDD §12.1: 1 metre per cell.")]
         private float cellSize = 1.0f;
+
+        [SerializeField]
+        [Tooltip("The lot floor. The grid sizes itself to the combined world bounds of this object's renderers (reference a parent that spans the whole lot, including locked rooms).")]
+        private Transform lotFloor = null;
+
         [SerializeField]
         private Color occupiedGizmoColor = new Color(0.88f, 0.44f, 0.33f, 0.4f);
-        [SerializeField]
-        private Color unwalkableGizmoColor = new Color(0.18f, 0.20f, 0.21f, 0.4f);
 
         private const float GIZMO_OVERLAY_SCALE = 0.9f;
         private const float GIZMO_OVERLAY_HEIGHT = 0.05f;
+        // Nudge the max corner inward before flooring to a cell, so a floor edge sitting exactly on a
+        // cell boundary counts the last covered cell rather than the empty one past it.
+        private const float EDGE_EPSILON = 0.001f;
 
         private GridCell[,] cells;
         private readonly List<Room> rooms = new List<Room>();
         private int nextRoomId = 1;
 
-        public int Width { get { return width; } }
-        public int Height { get { return height; } }
+        // Derived from the lot floor (RecomputeMetrics). Cached at runtime; recomputed live in the
+        // editor so gizmos and the camera track the floor as it is resized.
+        private Vector3 gridOrigin;
+        private int width;
+        private int height;
+
         public float CellSize { get { return cellSize; } }
         public List<Room> Rooms { get { return rooms; } }
 
+        /// <summary>World-space min corner of the grid (the lot floor's min X/Z at its surface Y).</summary>
+        public Vector3 Origin
+        {
+            get
+            {
+                if (!Application.isPlaying)
+                {
+                    RecomputeMetrics();
+                }
+
+                return gridOrigin;
+            }
+        }
+
+        public int Width
+        {
+            get
+            {
+                if (!Application.isPlaying)
+                {
+                    RecomputeMetrics();
+                }
+
+                return width;
+            }
+        }
+
+        public int Height
+        {
+            get
+            {
+                if (!Application.isPlaying)
+                {
+                    RecomputeMetrics();
+                }
+
+                return height;
+            }
+        }
+
         private void Awake()
         {
-            cells = new GridCell[width, height];
+            RecomputeMetrics();
 
-            for (int x = 0; x < width; x++)
+            if (width > 0 && height > 0)
             {
-                for (int y = 0; y < height; y++)
+                cells = new GridCell[width, height];
+
+                for (int x = 0; x < width; x++)
                 {
-                    cells[x, y] = new GridCell(new Vector2Int(x, y));
+                    for (int y = 0; y < height; y++)
+                    {
+                        cells[x, y] = new GridCell(new Vector2Int(x, y));
+                    }
                 }
+            }
+            else
+            {
+                Debug.LogError("[GridSystem] Could not derive grid size — assign a lotFloor with renderers. No cells were created.", this);
+            }
+        }
+
+        // Derives origin/width/height from the lot floor's combined renderer bounds. Sets zero size on
+        // a missing floor so callers fail safe rather than on stale numbers.
+        private void RecomputeMetrics()
+        {
+            if (lotFloor != null)
+            {
+                Renderer[] renderers = lotFloor.GetComponentsInChildren<Renderer>();
+
+                if (renderers.Length > 0)
+                {
+                    Bounds bounds = renderers[0].bounds;
+
+                    for (int i = 1; i < renderers.Length; i++)
+                    {
+                        bounds.Encapsulate(renderers[i].bounds);
+                    }
+
+                    // Origin at the floor's min X/Z, at its top surface Y so placed objects sit on it.
+                    gridOrigin = new Vector3(bounds.min.x, bounds.max.y, bounds.min.z);
+                    width = Mathf.CeilToInt(bounds.size.x / cellSize);
+                    height = Mathf.CeilToInt(bounds.size.z / cellSize);
+                }
+                else
+                {
+                    gridOrigin = lotFloor.position;
+                    width = 0;
+                    height = 0;
+                }
+            }
+            else
+            {
+                gridOrigin = transform.position;
+                width = 0;
+                height = 0;
             }
         }
 
         /// <summary>
-        /// Returns the cell at the given grid position, or null if out of bounds.
+        /// Returns the cell at the given grid position, or null if out of bounds or before the grid is built.
         /// </summary>
         public GridCell GetCell(Vector2Int position)
         {
             GridCell result = null;
 
-            if (IsInBounds(position))
+            if (cells != null && IsInBounds(position))
             {
                 result = cells[position.x, position.y];
             }
@@ -66,14 +161,12 @@ namespace PawsAndCare.Building
         /// </summary>
         public Vector3 GridToWorld(Vector2Int gridPos)
         {
-            // World position = grid origin (transform.position)
-            //                + grid index × cell size  (offset to the cell's near corner)
-            //                + half a cell             (offset from corner to center)
-            float worldX = transform.position.x + (gridPos.x * cellSize) + (cellSize * 0.5f);
-            float worldZ = transform.position.z + (gridPos.y * cellSize) + (cellSize * 0.5f);
-            // Y stays at the grid's ground level — the grid is a flat plane in XZ.
-            float worldY = transform.position.y;
-            return new Vector3(worldX, worldY, worldZ);
+            Vector3 origin = Origin;
+            // World position = grid origin + grid index × cell size (to the cell's near corner)
+            //                + half a cell (corner → center). Y stays at the grid's ground level.
+            float worldX = origin.x + (gridPos.x * cellSize) + (cellSize * 0.5f);
+            float worldZ = origin.z + (gridPos.y * cellSize) + (cellSize * 0.5f);
+            return new Vector3(worldX, origin.y, worldZ);
         }
 
         /// <summary>
@@ -82,27 +175,74 @@ namespace PawsAndCare.Building
         /// </summary>
         public Vector2Int WorldToGrid(Vector3 worldPos)
         {
-            // Express the world point in grid-local space (subtract the grid origin).
-            float localX = worldPos.x - transform.position.x;
-            float localZ = worldPos.z - transform.position.z;
-            // FloorToInt (not (int) truncation): floor rounds toward negative infinity,
-            // so a world point at local X = -0.3 with cellSize 1 maps to grid x = -1,
-            // not 0. That matters for out-of-bounds detection on the negative side.
-            int gridX = Mathf.FloorToInt(localX / cellSize);
-            int gridY = Mathf.FloorToInt(localZ / cellSize);
+            Vector3 origin = Origin;
+            // Express the world point in grid-local space, then floor (rounds toward -inf, so points
+            // just left/below the grid map to negative cells for correct out-of-bounds detection).
+            int gridX = Mathf.FloorToInt((worldPos.x - origin.x) / cellSize);
+            int gridY = Mathf.FloorToInt((worldPos.z - origin.z) / cellSize);
             return new Vector2Int(gridX, gridY);
         }
 
         /// <summary>
-        /// True when the cell exists, is not occupied, and is walkable.
+        /// True when the cell exists and is not occupied.
         /// </summary>
         public bool IsCellAvailable(Vector2Int position)
         {
             GridCell cell = GetCell(position);
 
-            bool available = cell != null && !cell.IsOccupied && cell.IsWalkable;
+            bool available = cell != null && !cell.IsOccupied;
 
             return available;
+        }
+
+        /// <summary>
+        /// True when every cell of a footprint (origin plus size in cells) is available. Used by
+        /// placement to validate a multi-cell object before committing.
+        /// </summary>
+        public bool AreCellsAvailable(Vector2Int origin, Vector2Int footprint)
+        {
+            bool available = true;
+
+            for (int x = 0; x < footprint.x && available; x++)
+            {
+                for (int y = 0; y < footprint.y && available; y++)
+                {
+                    if (!IsCellAvailable(new Vector2Int(origin.x + x, origin.y + y)))
+                    {
+                        available = false;
+                    }
+                }
+            }
+
+            return available;
+        }
+
+        /// <summary>
+        /// Returns the world-AABB-derived cells a world rectangle covers, clamped to the grid. Lets
+        /// scene objects (rooms, placed items) claim cells from their world bounds without hand-typed
+        /// coordinates.
+        /// </summary>
+        public List<Vector2Int> GetCellsInBounds(Bounds worldBounds)
+        {
+            List<Vector2Int> covered = new List<Vector2Int>();
+
+            Vector2Int min = WorldToGrid(worldBounds.min);
+            Vector2Int max = WorldToGrid(new Vector3(worldBounds.max.x - EDGE_EPSILON, 0.0f, worldBounds.max.z - EDGE_EPSILON));
+
+            int minX = Mathf.Max(0, min.x);
+            int minY = Mathf.Max(0, min.y);
+            int maxX = Mathf.Min(Width - 1, max.x);
+            int maxY = Mathf.Min(Height - 1, max.y);
+
+            for (int x = minX; x <= maxX; x++)
+            {
+                for (int y = minY; y <= maxY; y++)
+                {
+                    covered.Add(new Vector2Int(x, y));
+                }
+            }
+
+            return covered;
         }
 
         /// <summary>
@@ -121,21 +261,21 @@ namespace PawsAndCare.Building
                 GridCell cell = GetCell(cellPos);
 
                 if (cell != null)
-                {          
+                {
                     if (cell.RoomId == 0)
                     {
                         cell.SetRoomId(room.RoomId);
-                        room.AddCell(cellPos);     
+                        room.AddCell(cellPos);
                     }
                     else
                     {
                         Debug.LogWarning($"[GridSystem] CreateRoom: cell {cellPos} already belongs to room {cell.RoomId}, skipping.", this);
-                    }              
+                    }
                 }
                 else
                 {
                     Debug.LogWarning($"[GridSystem] CreateRoom: cell {cellPos} is out of bounds, skipping.", this);
-                }              
+                }
             }
 
             rooms.Add(room);
@@ -170,56 +310,43 @@ namespace PawsAndCare.Building
 
         private void OnDrawGizmos()
         {
-            Gizmos.color = Color.white;
-            Vector3 origin = transform.position;
+            // Recompute from the floor so the overlay tracks it live in the scene view (no play needed).
+            RecomputeMetrics();
 
-            // Vertical gridlines: one for each column boundary (inclusive on both ends,
-            // so a width-N grid draws N+1 lines).
-            for (int x = 0; x <= width; x++)
+            if (width > 0 && height > 0)
             {
-                Vector3 start = origin + new Vector3(x * cellSize, 0.0f, 0.0f);
-                Vector3 end = origin + new Vector3(x * cellSize, 0.0f, height * cellSize);
-                Gizmos.DrawLine(start, end);
-            }
+                Gizmos.color = Color.white;
 
-            // Horizontal gridlines: one for each row boundary.
-            for (int y = 0; y <= height; y++)
-            {
-                Vector3 start = origin + new Vector3(0.0f, 0.0f, y * cellSize);
-                Vector3 end = origin + new Vector3(width * cellSize, 0.0f, y * cellSize);
-                Gizmos.DrawLine(start, end);
-            }
-
-            // Per-cell state overlay only renders at runtime (cells[,] is allocated in
-            // Awake). In edit mode the grid is just the white lines above.
-            if (cells != null)
-            {
-                // Overlay is a flat tile, 90% of cell width to leave a small gap that
-                // makes the underlying gridlines still visible at cell boundaries.
-                Vector3 overlaySize = new Vector3(cellSize * GIZMO_OVERLAY_SCALE, GIZMO_OVERLAY_HEIGHT, cellSize * GIZMO_OVERLAY_SCALE);
-
-                for (int x = 0; x < width; x++)
+                // Vertical gridlines: one per column boundary (N columns → N+1 lines).
+                for (int x = 0; x <= width; x++)
                 {
-                    for (int y = 0; y < height; y++)
+                    Vector3 start = gridOrigin + new Vector3(x * cellSize, 0.0f, 0.0f);
+                    Vector3 end = gridOrigin + new Vector3(x * cellSize, 0.0f, height * cellSize);
+                    Gizmos.DrawLine(start, end);
+                }
+
+                // Horizontal gridlines: one per row boundary.
+                for (int y = 0; y <= height; y++)
+                {
+                    Vector3 start = gridOrigin + new Vector3(0.0f, 0.0f, y * cellSize);
+                    Vector3 end = gridOrigin + new Vector3(width * cellSize, 0.0f, y * cellSize);
+                    Gizmos.DrawLine(start, end);
+                }
+
+                // Per-cell occupied overlay only renders at runtime (cells[,] exists then).
+                if (cells != null)
+                {
+                    Vector3 overlaySize = new Vector3(cellSize * GIZMO_OVERLAY_SCALE, GIZMO_OVERLAY_HEIGHT, cellSize * GIZMO_OVERLAY_SCALE);
+                    Gizmos.color = occupiedGizmoColor;
+
+                    for (int x = 0; x < width; x++)
                     {
-                        GridCell cell = cells[x, y];
-
-                        if (cell.IsOccupied || !cell.IsWalkable)
+                        for (int y = 0; y < height; y++)
                         {
-                            // Occupied takes priority over unwalkable for visibility —
-                            // an occupied cell is more important to surface than a
-                            // generic terrain block.
-                            if (cell.IsOccupied)
+                            if (cells[x, y].IsOccupied)
                             {
-                                Gizmos.color = occupiedGizmoColor;
+                                Gizmos.DrawCube(GridToWorld(new Vector2Int(x, y)), overlaySize);
                             }
-                            else
-                            {
-                                Gizmos.color = unwalkableGizmoColor;
-                            }
-
-                            Vector3 cellCenter = GridToWorld(new Vector2Int(x, y));
-                            Gizmos.DrawCube(cellCenter, overlaySize);
                         }
                     }
                 }

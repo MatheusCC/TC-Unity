@@ -202,7 +202,7 @@ namespace PawsAndCare.Camera
             {
                 // Rect (x, y, width, height) where the Rect's "y" is our world Z axis.
                 // Called once in Start; if grid size changes at runtime, call again.
-                Vector3 gridOrigin = gridSystem.transform.position;
+                Vector3 gridOrigin = gridSystem.Origin;
                 float worldWidth = gridSystem.Width * gridSystem.CellSize;
                 float worldHeight = gridSystem.Height * gridSystem.CellSize;
                 panBounds = new Rect(gridOrigin.x, gridOrigin.z, worldWidth, worldHeight);
@@ -457,7 +457,7 @@ namespace PawsAndCare.Camera
             if (gridSystem != null)
             {
                 Gizmos.color = Color.cyan;
-                Vector3 gridOrigin = gridSystem.transform.position;
+                Vector3 gridOrigin = gridSystem.Origin;
                 float worldWidth = gridSystem.Width * gridSystem.CellSize;
                 float worldHeight = gridSystem.Height * gridSystem.CellSize;
 

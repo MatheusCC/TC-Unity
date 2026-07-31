@@ -3,8 +3,9 @@ using UnityEngine;
 namespace PawsAndCare.Building
 {
     /// <summary>
-    /// Single cell in the grid — owns its coordinate, occupancy, room assignment,
-    /// and walkability. Position is fixed at construction; mutate the rest via setters.
+    /// Single cell in the grid — owns its coordinate, occupancy, and room assignment.
+    /// Position is fixed at construction; mutate the rest via setters. (Pathfinding is owned by the
+    /// NavMesh, not the grid, so cells carry no walkability flag.)
     /// </summary>
     public class GridCell
     {
@@ -12,13 +13,11 @@ namespace PawsAndCare.Building
         private bool isOccupied;
         private GameObject occupiedBy;
         private int roomId;
-        private bool isWalkable;
 
         public Vector2Int Position { get { return position; } }
         public bool IsOccupied { get { return isOccupied; } }
         public GameObject OccupiedBy { get { return occupiedBy; } }
         public int RoomId { get { return roomId; } }
-        public bool IsWalkable { get { return isWalkable; } }
 
         public GridCell(Vector2Int position)
         {
@@ -26,7 +25,6 @@ namespace PawsAndCare.Building
             this.isOccupied = false;
             this.occupiedBy = null;
             this.roomId = 0;
-            this.isWalkable = true;
         }
 
         /// <summary>
@@ -44,14 +42,6 @@ namespace PawsAndCare.Building
         public void SetRoomId(int newRoomId)
         {
             roomId = newRoomId;
-        }
-
-        /// <summary>
-        /// Marks the cell as walkable or non-walkable for pathfinding.
-        /// </summary>
-        public void SetWalkable(bool walkable)
-        {
-            isWalkable = walkable;
         }
     }
 }
